@@ -48,26 +48,36 @@ app.post('/webhook/new-prospect', async (req, res) => {
     const email = record.fields.Email;
     const firstName = record.fields['First Name'] || '';
     const lastName = record.fields['Last Name'] || '';
+    const source = record.fields.Source || 'Unknown';
     
     console.log(`📧 Enrolling ${email} in marketing automation...`);
+    console.log(`Source: ${source}`);
 
-    // Add contact to SendGrid Marketing list
+    // Check if SENDGRID_LIST_ID is configured
+    if (!process.env.SENDGRID_LIST_ID) {
+      console.warn('⚠️  SENDGRID_LIST_ID not configured - contact will not be added to list');
+      return res.json({ 
+        success: true, 
+        warning: 'SENDGRID_LIST_ID not configured',
+        email 
+      });
+    }
+
+    // Add contact to SendGrid Marketing list (simplified - no custom fields)
     const contactData = {
-      list_ids: [process.env.SENDGRID_LIST_ID], // You'll set this in .env
+      list_ids: [process.env.SENDGRID_LIST_ID],
       contacts: [
         {
           email: email,
           first_name: firstName,
-          last_name: lastName,
-          custom_fields: {
-            signup_date: new Date().toISOString(),
-            source: record.fields.Source || 'Unknown'
-          }
+          last_name: lastName
         }
       ]
     };
 
-    await axios.put(
+    console.log('SendGrid request:', JSON.stringify(contactData, null, 2));
+
+    const response = await axios.put(
       'https://api.sendgrid.com/v3/marketing/contacts',
       contactData,
       {
@@ -79,11 +89,18 @@ app.post('/webhook/new-prospect', async (req, res) => {
     );
 
     console.log(`✅ Successfully enrolled ${email}`);
+    console.log('SendGrid response:', response.data);
     
-    res.json({ success: true, email });
+    res.json({ success: true, email, sendgridResponse: response.data });
   } catch (error) {
     console.error('❌ Error enrolling prospect:', error.response?.data || error.message);
-    res.status(500).json({ error: error.message });
+    if (error.response) {
+      console.error('SendGrid error details:', JSON.stringify(error.response.data, null, 2));
+    }
+    res.status(500).json({ 
+      error: error.message,
+      details: error.response?.data
+    });
   }
 });
 
