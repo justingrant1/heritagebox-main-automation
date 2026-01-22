@@ -303,6 +303,24 @@ app.post('/webhook/create-dropbox-folder', async (req, res) => {
   }
 });
 
+// Root endpoint - Shows API info
+app.get('/', (req, res) => {
+  res.json({
+    name: 'HeritageBox Automation Server',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      health: 'GET /health',
+      webhooks: [
+        'POST /webhook/new-prospect',
+        'POST /webhook/order-status-changed',
+        'POST /webhook/create-dropbox-folder'
+      ]
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
