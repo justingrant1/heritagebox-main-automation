@@ -271,6 +271,14 @@ app.post('/webhook/create-dropbox-folder', async (req, res) => {
       return res.status(400).json({ error: 'Missing customer name' });
     }
 
+    // Check if Dropbox token is configured
+    if (!DROPBOX_ACCESS_TOKEN) {
+      console.error('⚠️  DROPBOX_ACCESS_TOKEN not configured');
+      return res.status(500).json({ 
+        error: 'DROPBOX_ACCESS_TOKEN not configured in environment variables' 
+      });
+    }
+
     const customerName = record.fields['Customer Name'];
     const orderNumber = record.fields['Order Number'] || 'Unknown';
     const recordId = record.id;
@@ -280,34 +288,49 @@ app.post('/webhook/create-dropbox-folder', async (req, res) => {
     const folderPath = `/${folderName}`;
     
     console.log(`📁 Creating Dropbox folder: ${folderPath}`);
+    console.log(`Customer: ${customerName}, Order: ${orderNumber}`);
 
     // Create folder in Dropbox
-    await dbx.filesCreateFolderV2({
-      path: folderPath,
-      autorename: true // In case folder already exists
-    });
-
-    console.log(`✅ Folder created: ${folderPath}`);
+    try {
+      await dbx.filesCreateFolderV2({
+        path: folderPath,
+        autorename: true // In case folder already exists
+      });
+      console.log(`✅ Folder created: ${folderPath}`);
+    } catch (dropboxError) {
+      console.error('Dropbox folder creation error:', dropboxError.error || dropboxError);
+      throw new Error(`Dropbox folder creation failed: ${dropboxError.error?.error_summary || dropboxError.message}`);
+    }
 
     // Create shared link
-    const sharedLinkResponse = await dbx.sharingCreateSharedLinkWithSettings({
-      path: folderPath,
-      settings: {
-        requested_visibility: 'public'
-      }
-    });
-
-    const dropboxLink = sharedLinkResponse.result.url;
-    console.log(`🔗 Shared link created: ${dropboxLink}`);
+    let dropboxLink;
+    try {
+      const sharedLinkResponse = await dbx.sharingCreateSharedLinkWithSettings({
+        path: folderPath,
+        settings: {
+          requested_visibility: 'public'
+        }
+      });
+      dropboxLink = sharedLinkResponse.result.url;
+      console.log(`🔗 Shared link created: ${dropboxLink}`);
+    } catch (linkError) {
+      console.error('Dropbox shared link error:', linkError.error || linkError);
+      throw new Error(`Dropbox shared link failed: ${linkError.error?.error_summary || linkError.message}`);
+    }
 
     // Update Airtable record with Dropbox link
-    await airtableRequest(`Orders/${recordId}`, 'PATCH', {
-      fields: {
-        'Dropbox Link': dropboxLink
-      }
-    });
-
-    console.log(`✅ Airtable updated with Dropbox link`);
+    try {
+      await airtableRequest(`Orders/${recordId}`, 'PATCH', {
+        fields: {
+          'Dropbox Link': dropboxLink
+        }
+      });
+      console.log(`✅ Airtable updated with Dropbox link`);
+    } catch (airtableError) {
+      console.error('Airtable update error:', airtableError);
+      // Don't fail the whole operation if Airtable update fails
+      console.warn('⚠️  Could not update Airtable, but folder was created');
+    }
     
     res.json({ 
       success: true, 
@@ -315,8 +338,11 @@ app.post('/webhook/create-dropbox-folder', async (req, res) => {
       dropboxLink 
     });
   } catch (error) {
-    console.error('❌ Error creating Dropbox folder:', error);
-    res.status(500).json({ error: error.message });
+    console.error('❌ Error in Dropbox automation:', error);
+    res.status(500).json({ 
+      error: error.message,
+      details: error.error || 'See server logs for details'
+    });
   }
 });
 
