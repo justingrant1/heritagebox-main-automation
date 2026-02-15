@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
+const crypto = require('crypto');
 const { Dropbox } = require('dropbox');
 const sgMail = require('@sendgrid/mail');
 
@@ -12,6 +13,8 @@ const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const DROPBOX_ACCESS_TOKEN = process.env.DROPBOX_ACCESS_TOKEN;
+const SHIPPO_API_TOKEN = process.env.SHIPPO_API_TOKEN;
+const SHIPPO_WEBHOOK_SECRET = process.env.SHIPPO_WEBHOOK_SECRET;
 const PORT = process.env.PORT || 3000;
 
 sgMail.setApiKey(SENDGRID_API_KEY);
@@ -346,18 +349,237 @@ app.post('/webhook/create-dropbox-folder', async (req, res) => {
   }
 });
 
+// ============================================
+// AUTOMATION 4: Shippo Tracking Webhook
+// ============================================
+
+// Helper: Find order by tracking number (checks all 3 labels)
+async function findOrderByTracking(trackingNumber) {
+  try {
+    // Search using Airtable API formula
+    const formula = `OR(
+      {Label 1 Tracking} = '${trackingNumber}',
+      {Label 2 Tracking} = '${trackingNumber}',
+      {Label 3 Tracking} = '${trackingNumber}'
+    )`;
+    
+    const response = await airtableRequest(
+      `Orders?filterByFormula=${encodeURIComponent(formula)}`,
+      'GET'
+    );
+    
+    if (response.records && response.records.length > 0) {
+      return response.records[0];
+    }
+    
+    return null;
+      
+  } catch (error) {
+    console.error('Error finding order by tracking:', error);
+    throw error;
+  }
+}
+
+// Helper: Determine what status change to make
+function determineNewStatus(order, trackingNumber, shippoStatus) {
+  const currentStatus = order.fields['Ops Status'];
+  
+  console.log(`   Current Status: ${currentStatus}`);
+  console.log(`   Shippo Status: ${shippoStatus}`);
+  
+  // Label 1: Kit to customer
+  if (trackingNumber === order.fields['Label 1 Tracking']) {
+    console.log(`   Label Type: Label 1 (Kit to Customer)`);
+    
+    // When kit is in transit
+    if (['TRANSIT', 'IN_TRANSIT'].includes(shippoStatus) && 
+        currentStatus === 'Pending') {
+      return 'Kit Sent';
+    }
+  }
+  
+  // Label 2: Customer returning media
+  else if (trackingNumber === order.fields['Label 2 Tracking']) {
+    console.log(`   Label Type: Label 2 (Customer Returning Media)`);
+    
+    // When media is delivered to us
+    if (shippoStatus === 'DELIVERED' && 
+        currentStatus === 'Kit Sent') {
+      return 'Media Received';
+    }
+  }
+  
+  // Label 3: Returning originals to customer
+  else if (trackingNumber === order.fields['Label 3 Tracking']) {
+    console.log(`   Label Type: Label 3 (Returning Originals)`);
+    
+    // When package is picked up or in transit (from Quality Check only)
+    if (['TRANSIT', 'IN_TRANSIT', 'PRE_TRANSIT'].includes(shippoStatus) &&
+        currentStatus === 'Quality Check') {
+      return 'Shipping Back';
+    }
+    
+    // When delivered to customer
+    if (shippoStatus === 'DELIVERED' &&
+        currentStatus === 'Shipping Back') {
+      return 'Complete';
+    }
+  }
+  
+  return null; // No change needed
+}
+
+// Helper: Update order status in Airtable
+async function updateOrderStatus(recordId, newStatus) {
+  try {
+    await airtableRequest(`Orders/${recordId}`, 'PATCH', {
+      fields: {
+        'Ops Status': newStatus
+      }
+    });
+    console.log(`✅ Airtable updated: ${recordId} → ${newStatus}`);
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    throw error;
+  }
+}
+
+// Helper: Validate Shippo webhook signature
+function validateShippoWebhook(req) {
+  // Shippo signs webhooks with HMAC-SHA256
+  // See: https://goshippo.com/docs/webhooks#webhook-security
+  
+  if (!SHIPPO_WEBHOOK_SECRET) {
+    console.warn('⚠️  No SHIPPO_WEBHOOK_SECRET configured - skipping validation');
+    return true; // Skip validation in development
+  }
+  
+  const signature = req.headers['x-shippo-signature'];
+  if (!signature) {
+    console.error('❌ No signature header found');
+    return false;
+  }
+  
+  const payload = JSON.stringify(req.body);
+  const hmac = crypto.createHmac('sha256', SHIPPO_WEBHOOK_SECRET);
+  const digest = hmac.update(payload).digest('hex');
+  
+  const isValid = signature === digest;
+  console.log(`🔐 Signature validation: ${isValid ? 'PASS' : 'FAIL'}`);
+  
+  return isValid;
+}
+
+// Helper: Check if status transition is valid (Shippo-triggered only)
+function isValidTransition(currentStatus, newStatus) {
+  // Only validate transitions that Shippo webhooks can trigger
+  // Employee manually handles: Media Received → Digitizing → Quality Check
+  const validTransitions = {
+    'Pending': ['Kit Sent'],
+    'Kit Sent': ['Media Received'],
+    'Quality Check': ['Shipping Back'],
+    'Shipping Back': ['Complete']
+  };
+  
+  const allowed = validTransitions[currentStatus];
+  return allowed && allowed.includes(newStatus);
+}
+
+// Main webhook handler
+app.post('/webhook/shippo-tracking', async (req, res) => {
+  try {
+    console.log('📦 Shippo tracking webhook received');
+    
+    // 1. Validate webhook signature (security)
+    const isValid = validateShippoWebhook(req);
+    if (!isValid) {
+      console.error('❌ Invalid Shippo webhook signature');
+      return res.status(403).json({ error: 'Invalid signature' });
+    }
+    
+    // 2. Extract tracking information
+    const { data } = req.body;
+    const trackingNumber = data.tracking_number;
+    const trackingStatus = data.tracking_status.status;
+    const trackingSubstatus = data.tracking_status.substatus;
+    const statusDate = data.tracking_status.status_date;
+    
+    console.log(`📍 Tracking Update: ${trackingNumber} → ${trackingStatus}`);
+    console.log(`   Substatus: ${trackingSubstatus}`);
+    console.log(`   Date: ${statusDate}`);
+    
+    // 3. Find order by tracking number
+    const order = await findOrderByTracking(trackingNumber);
+    if (!order) {
+      console.log(`⚠️  No order found for tracking: ${trackingNumber}`);
+      return res.json({ success: true, message: 'No order found' });
+    }
+    
+    const orderNumber = order.fields['Order Number'] || order.id;
+    console.log(`✅ Found order: ${orderNumber}`);
+    
+    // 4. Determine new status based on which label and current status
+    const newOpsStatus = determineNewStatus(order, trackingNumber, trackingStatus);
+    if (!newOpsStatus) {
+      console.log(`ℹ️  No status change needed for ${orderNumber}`);
+      return res.json({ 
+        success: true, 
+        message: 'No status change needed',
+        order: orderNumber,
+        currentStatus: order.fields['Ops Status']
+      });
+    }
+    
+    // 5. Check if this is a valid transition
+    const currentStatus = order.fields['Ops Status'];
+    if (!isValidTransition(currentStatus, newOpsStatus)) {
+      console.warn(`⚠️  Invalid transition: ${currentStatus} → ${newOpsStatus}`);
+      return res.json({
+        success: false,
+        message: 'Invalid status transition',
+        order: orderNumber,
+        currentStatus: currentStatus,
+        attemptedStatus: newOpsStatus
+      });
+    }
+    
+    // 6. Update Airtable
+    await updateOrderStatus(order.id, newOpsStatus);
+    
+    // 7. Airtable automation will detect the change and send email
+    console.log(`✅ Updated order ${orderNumber}: ${currentStatus} → ${newOpsStatus}`);
+    console.log(`📧 Airtable automation will send email notification`);
+    
+    res.json({ 
+      success: true, 
+      order: orderNumber,
+      previousStatus: currentStatus,
+      newStatus: newOpsStatus,
+      trackingNumber: trackingNumber
+    });
+    
+  } catch (error) {
+    console.error('❌ Shippo webhook error:', error);
+    res.status(500).json({ 
+      error: error.message,
+      details: error.stack
+    });
+  }
+});
+
 // Root endpoint - Shows API info
 app.get('/', (req, res) => {
   res.json({
     name: 'HeritageBox Automation Server',
-    version: '1.0.0',
+    version: '1.1.0',
     status: 'running',
     endpoints: {
       health: 'GET /health',
       webhooks: [
         'POST /webhook/new-prospect',
         'POST /webhook/order-status-changed',
-        'POST /webhook/create-dropbox-folder'
+        'POST /webhook/create-dropbox-folder',
+        'POST /webhook/shippo-tracking'
       ]
     },
     timestamp: new Date().toISOString()
@@ -375,4 +597,5 @@ app.listen(PORT, () => {
   console.log(`   - POST /webhook/new-prospect`);
   console.log(`   - POST /webhook/order-status-changed`);
   console.log(`   - POST /webhook/create-dropbox-folder`);
+  console.log(`   - POST /webhook/shippo-tracking`);
 });
