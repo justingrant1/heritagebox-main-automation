@@ -341,8 +341,21 @@ app.post('/webhook/create-dropbox-folder', async (req, res) => {
       dropboxLink = sharedLinkResponse.result.url;
       console.log(`🔗 Shared link created: ${dropboxLink}`);
     } catch (linkError) {
-      console.error('Dropbox shared link error:', linkError.error || linkError);
-      throw new Error(`Dropbox shared link failed: ${linkError.error?.error_summary || linkError.message}`);
+      // If shared link already exists, retrieve the existing one
+      if (linkError?.error?.error_summary?.includes('shared_link_already_exists')) {
+        console.log('🔗 Shared link already exists, retrieving...');
+        const existingLinks = await dbx.sharingListSharedLinks({
+          path: folderPath,
+          direct_only: true
+        });
+        if (existingLinks.result.links.length > 0) {
+          dropboxLink = existingLinks.result.links[0].url;
+          console.log(`🔗 Found existing link: ${dropboxLink}`);
+        }
+      } else {
+        console.error('Dropbox shared link error:', linkError.error || linkError);
+        throw new Error(`Dropbox shared link failed: ${linkError.error?.error_summary || linkError.message}`);
+      }
     }
 
     // Update Airtable record with Dropbox link
