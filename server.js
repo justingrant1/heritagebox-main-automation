@@ -380,52 +380,56 @@ async function findOrderByTracking(trackingNumber) {
   }
 }
 
-// Helper: Determine what status change to make
+// Helper: Determine what status change to make (STATUS-AWARE - handles label swaps)
 function determineNewStatus(order, trackingNumber, shippoStatus) {
   const currentStatus = order.fields['Ops Status'];
   
   console.log(`   Current Status: ${currentStatus}`);
   console.log(`   Shippo Status: ${shippoStatus}`);
   
-  // Label 1: Kit to customer
-  if (trackingNumber === order.fields['Label 1 Tracking']) {
-    console.log(`   Label Type: Label 1 (Kit to Customer)`);
+  // Determine which field has this tracking number (for logging only)
+  let labelField = 'Unknown';
+  if (trackingNumber === order.fields['Label 1 Tracking']) labelField = 'Label 1';
+  else if (trackingNumber === order.fields['Label 2 Tracking']) labelField = 'Label 2';
+  else if (trackingNumber === order.fields['Label 3 Tracking']) labelField = 'Label 3';
+  console.log(`   Tracking found in: ${labelField}`);
+  
+  // Use ORDER STATUS to determine what this event actually means
+  // This handles cases where Label 1 and Label 3 are accidentally swapped
+  
+  // TRANSIT/IN_TRANSIT events
+  if (['TRANSIT', 'IN_TRANSIT', 'PRE_TRANSIT'].includes(shippoStatus)) {
     
-    // When kit is in transit
-    if (['TRANSIT', 'IN_TRANSIT'].includes(shippoStatus) && 
-        currentStatus === 'Pending') {
+    // If order is Pending → This must be the KIT going out (Label 1 intent)
+    if (currentStatus === 'Pending') {
+      console.log(`   → Detected: Kit shipping to customer`);
       return 'Kit Sent';
     }
-  }
-  
-  // Label 2: Customer returning media
-  else if (trackingNumber === order.fields['Label 2 Tracking']) {
-    console.log(`   Label Type: Label 2 (Customer Returning Media)`);
     
-    // When media is delivered to us
-    if (shippoStatus === 'DELIVERED' && 
-        currentStatus === 'Kit Sent') {
-      return 'Media Received';
-    }
-  }
-  
-  // Label 3: Returning originals to customer
-  else if (trackingNumber === order.fields['Label 3 Tracking']) {
-    console.log(`   Label Type: Label 3 (Returning Originals)`);
-    
-    // When package is picked up or in transit (from Quality Check only)
-    if (['TRANSIT', 'IN_TRANSIT', 'PRE_TRANSIT'].includes(shippoStatus) &&
-        currentStatus === 'Quality Check') {
+    // If order is Quality Check/Digitizing → This must be ORIGINALS going back (Label 3 intent)
+    if (['Quality Check', 'Digitizing'].includes(currentStatus)) {
+      console.log(`   → Detected: Originals shipping back to customer`);
       return 'Shipping Back';
     }
+  }
+  
+  // DELIVERED events
+  if (shippoStatus === 'DELIVERED') {
     
-    // When delivered to customer
-    if (shippoStatus === 'DELIVERED' &&
-        currentStatus === 'Shipping Back') {
+    // If order is Kit Sent → This must be MEDIA being delivered to us (Label 2)
+    if (currentStatus === 'Kit Sent') {
+      console.log(`   → Detected: Media delivered to HeritageBox`);
+      return 'Media Received';
+    }
+    
+    // If order is Shipping Back → This must be ORIGINALS delivered to customer (Label 3)
+    if (currentStatus === 'Shipping Back') {
+      console.log(`   → Detected: Originals delivered to customer`);
       return 'Complete';
     }
   }
   
+  console.log(`   → No status change needed for current state`);
   return null; // No change needed
 }
 
