@@ -12,13 +12,33 @@ app.use(express.json());
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
-const DROPBOX_ACCESS_TOKEN = process.env.DROPBOX_ACCESS_TOKEN;
+const DROPBOX_REFRESH_TOKEN = process.env.DROPBOX_REFRESH_TOKEN;
+const DROPBOX_APP_KEY = process.env.DROPBOX_APP_KEY;
+const DROPBOX_APP_SECRET = process.env.DROPBOX_APP_SECRET;
 const SHIPPO_API_TOKEN = process.env.SHIPPO_API_TOKEN;
 const SHIPPO_WEBHOOK_SECRET = process.env.SHIPPO_WEBHOOK_SECRET;
 const PORT = process.env.PORT || 3000;
 
 sgMail.setApiKey(SENDGRID_API_KEY);
-const dbx = new Dropbox({ accessToken: DROPBOX_ACCESS_TOKEN });
+
+// Dropbox token refresh helper
+async function getDropboxAccessToken() {
+  const response = await fetch('https://api.dropboxapi.com/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: DROPBOX_REFRESH_TOKEN,
+      client_id: DROPBOX_APP_KEY,
+      client_secret: DROPBOX_APP_SECRET,
+    }),
+  });
+  const data = await response.json();
+  if (!data.access_token) {
+    throw new Error('Failed to refresh Dropbox token: ' + JSON.stringify(data));
+  }
+  return data.access_token;
+}
 
 // Airtable helper
 const airtableRequest = async (endpoint, method = 'GET', data = null) => {
@@ -274,11 +294,11 @@ app.post('/webhook/create-dropbox-folder', async (req, res) => {
       return res.status(400).json({ error: 'Missing customer name' });
     }
 
-    // Check if Dropbox token is configured
-    if (!DROPBOX_ACCESS_TOKEN) {
-      console.error('⚠️  DROPBOX_ACCESS_TOKEN not configured');
+    // Check if Dropbox refresh token is configured
+    if (!DROPBOX_REFRESH_TOKEN || !DROPBOX_APP_KEY || !DROPBOX_APP_SECRET) {
+      console.error('⚠️  Dropbox credentials not configured');
       return res.status(500).json({ 
-        error: 'DROPBOX_ACCESS_TOKEN not configured in environment variables' 
+        error: 'Dropbox credentials not configured in environment variables' 
       });
     }
 
@@ -292,6 +312,10 @@ app.post('/webhook/create-dropbox-folder', async (req, res) => {
     
     console.log(`📁 Creating Dropbox folder: ${folderPath}`);
     console.log(`Customer: ${customerName}, Order: ${orderNumber}`);
+
+    // Get fresh access token and create Dropbox client
+    const accessToken = await getDropboxAccessToken();
+    const dbx = new Dropbox({ accessToken });
 
     // Create folder in Dropbox
     try {
