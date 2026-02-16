@@ -434,8 +434,8 @@ function determineNewStatus(order, trackingNumber, shippoStatus) {
   // Use ORDER STATUS to determine what this event actually means
   // This handles cases where Label 1 and Label 3 are accidentally swapped
   
-  // TRANSIT/IN_TRANSIT events
-  if (['TRANSIT', 'IN_TRANSIT', 'PRE_TRANSIT'].includes(shippoStatus)) {
+  // TRANSIT/IN_TRANSIT events (PRE_TRANSIT removed - only trigger on actual carrier scan)
+  if (['TRANSIT', 'IN_TRANSIT'].includes(shippoStatus)) {
     
     // If order is Pending → This must be the KIT going out (Label 1 intent)
     if (currentStatus === 'Pending') {
