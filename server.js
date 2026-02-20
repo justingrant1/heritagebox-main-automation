@@ -394,11 +394,7 @@ app.post('/webhook/create-dropbox-folder', async (req, res) => {
 async function findOrderByTracking(trackingNumber) {
   try {
     // Search using Airtable API formula
-    const formula = `OR(
-      {Label 1 Tracking} = '${trackingNumber}',
-      {Label 2 Tracking} = '${trackingNumber}',
-      {Label 3 Tracking} = '${trackingNumber}'
-    )`;
+    const formula = `OR({Label 1 Tracking}='${trackingNumber}',{Label 2 Tracking}='${trackingNumber}',{Label 3 Tracking}='${trackingNumber}')`;
     
     const response = await airtableRequest(
       `Orders?filterByFormula=${encodeURIComponent(formula)}`,
@@ -412,7 +408,7 @@ async function findOrderByTracking(trackingNumber) {
     return null;
       
   } catch (error) {
-    console.error('Error finding order by tracking:', error);
+    console.error('Error finding order by tracking:', error.message, error.response?.data);
     throw error;
   }
 }
@@ -600,7 +596,7 @@ app.post('/webhook/shippo-tracking', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Shippo webhook error:', error);
+    console.error('❌ Shippo webhook error:', error.message, error.response?.data);
     res.status(500).json({ 
       error: error.message,
       details: error.stack
