@@ -308,7 +308,7 @@ app.post('/webhook/create-dropbox-folder', async (req, res) => {
     
     // Create folder name: "FirstName LastName - OrderNumber"
     const folderName = `${customerName} - ${orderNumber}`;
-    const folderPath = `/${folderName}`;
+    const folderPath = `/HeritageboxClientFiles/${folderName}`;
     
     console.log(`📁 Creating Dropbox folder: ${folderPath}`);
     console.log(`Customer: ${customerName}, Order: ${orderNumber}`);
