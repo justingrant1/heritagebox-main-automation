@@ -144,6 +144,10 @@ app.post('/webhook/order-status-changed', async (req, res) => {
     const customerName = record.fields['Customer Name'] || 'Valued Customer';
     const orderNumber = record.fields['Order Number'] || 'N/A';
     const dropboxLink = record.fields['Dropbox Link'];
+    const activeTrackingNumber = record.fields['Active Tracking Number'];
+    const trackingUrl = activeTrackingNumber
+      ? `https://www.ups.com/track?tracknum=${encodeURIComponent(activeTrackingNumber)}`
+      : null;
 
     console.log(`📨 Sending status update email for order ${orderNumber} - Status: ${opsStatus}`);
 
@@ -169,6 +173,15 @@ app.post('/webhook/order-status-changed', async (req, res) => {
         html: `
           <h2>Great news, ${customerName}!</h2>
           <p>Your Heritage Box kit for order <strong>${orderNumber}</strong> has been shipped!</p>
+          ${activeTrackingNumber ? `
+            <p><strong>Tracking Number:</strong> ${activeTrackingNumber}</p>
+            <p>
+              <a
+                href="${trackingUrl}"
+                style="display:inline-block;background-color:#351c75;color:white;padding:12px 24px;text-decoration:none;border-radius:5px;font-weight:bold;"
+              >Track on UPS</a>
+            </p>
+          ` : ''}
           <p><strong>What to do when it arrives:</strong></p>
           <ol>
             <li>Carefully pack your photos, videos, and memorabilia</li>
@@ -222,6 +235,15 @@ app.post('/webhook/order-status-changed', async (req, res) => {
           <h2>Hi ${customerName},</h2>
           <p>We've carefully packaged your original items and they're heading back to you!</p>
           <p>Order <strong>${orderNumber}</strong> is on its way.</p>
+          ${activeTrackingNumber ? `
+            <p><strong>Tracking Number:</strong> ${activeTrackingNumber}</p>
+            <p>
+              <a
+                href="${trackingUrl}"
+                style="display:inline-block;background-color:#351c75;color:white;padding:12px 24px;text-decoration:none;border-radius:5px;font-weight:bold;"
+              >Track on UPS</a>
+            </p>
+          ` : ''}
           <p>You'll receive your digital files very soon!</p>
           <p>— The Heritage Box Team</p>
         `
@@ -467,12 +489,18 @@ function determineNewStatus(order, trackingNumber, shippoStatus) {
 }
 
 // Helper: Update order status in Airtable
-async function updateOrderStatus(recordId, newStatus) {
+async function updateOrderStatus(recordId, newStatus, trackingNumber = null) {
   try {
+    const fields = {
+      'Ops Status': newStatus
+    };
+
+    if (trackingNumber) {
+      fields['Active Tracking Number'] = trackingNumber;
+    }
+
     await airtableRequest(`Orders/${recordId}`, 'PATCH', {
-      fields: {
-        'Ops Status': newStatus
-      }
+      fields
     });
     console.log(`✅ Airtable updated: ${recordId} → ${newStatus}`);
   } catch (error) {
@@ -581,7 +609,7 @@ app.post('/webhook/shippo-tracking', async (req, res) => {
     }
     
     // 6. Update Airtable
-    await updateOrderStatus(order.id, newOpsStatus);
+    await updateOrderStatus(order.id, newOpsStatus, trackingNumber);
     
     // 7. Airtable automation will detect the change and send email
     console.log(`✅ Updated order ${orderNumber}: ${currentStatus} → ${newOpsStatus}`);
