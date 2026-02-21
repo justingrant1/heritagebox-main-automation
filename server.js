@@ -72,9 +72,65 @@ app.post('/webhook/new-prospect', async (req, res) => {
     const firstName = record.fields['First Name'] || '';
     const lastName = record.fields['Last Name'] || '';
     const source = record.fields.Source || 'Unknown';
+    const name = record.fields.Name || `${firstName} ${lastName}`.trim() || 'Unknown';
+    const phone = record.fields.Phone;
+    const inquiryType = record.fields['Inquiry Type'];
+    const mediaTypes = record.fields['Media Types'];
+    const quantity = record.fields['Quantity'];
+    const notes = record.fields.Notes;
+    const chatTranscript = record.fields['Chat Transcript'];
     
     console.log(`📧 Enrolling ${email} in marketing automation...`);
     console.log(`Source: ${source}`);
+
+    if (source === 'Contact Form') {
+      const subjectSuffix = inquiryType ? ` — ${inquiryType}` : '';
+      const subject = `💬 New Inquiry: ${name}${subjectSuffix}`;
+
+      const detailRows = [
+        { label: 'Name', value: name },
+        { label: 'Email', value: email },
+        { label: 'Phone', value: phone },
+        { label: 'Inquiry Type', value: inquiryType },
+        { label: 'Media Types', value: mediaTypes },
+        { label: 'Quantity', value: quantity }
+      ]
+        .filter((row) => row.value)
+        .map(
+          (row) => `
+            <tr>
+              <td style="padding:4px 8px; font-weight:bold;">${row.label}:</td>
+              <td style="padding:4px 8px;">${row.value}</td>
+            </tr>`
+        )
+        .join('');
+
+      const messageBlocks = [
+        notes ? `<p style="margin:0 0 12px;"><strong>Message:</strong><br/>${notes}</p>` : '',
+        chatTranscript
+          ? `<p style="margin:0 0 12px;"><strong>Chat Transcript:</strong><br/>${chatTranscript}</p>`
+          : ''
+      ].join('');
+
+      const notificationHtml = `
+        <p>You received a new contact form inquiry.</p>
+        <table style="border-collapse:collapse;">
+          ${detailRows}
+        </table>
+        ${messageBlocks || '<p>No message provided.</p>'}
+      `;
+
+      const notification = {
+        to: 'info@heritagebox.com',
+        from: process.env.SENDGRID_FROM_EMAIL,
+        replyTo: email,
+        subject,
+        html: notificationHtml
+      };
+
+      await sgMail.send(notification);
+      console.log(`✅ Contact form forwarded to info@heritagebox.com for ${email}`);
+    }
 
     // Check if SENDGRID_LIST_ID is configured
     if (!process.env.SENDGRID_LIST_ID) {
