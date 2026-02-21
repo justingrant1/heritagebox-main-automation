@@ -84,8 +84,8 @@ app.post('/webhook/new-prospect', async (req, res) => {
     console.log(`Source: ${source}`);
 
     if (source === 'Contact Form') {
-      const subjectSuffix = inquiryType ? ` — ${inquiryType}` : '';
-      const subject = `💬 New Inquiry: ${name}${subjectSuffix}`;
+      const subjectSuffix = inquiryType ? ` - ${inquiryType}` : '';
+      const subject = `Heritage Box Customer Service${subjectSuffix}`;
 
       const detailRows = [
         { label: 'Name', value: name },
