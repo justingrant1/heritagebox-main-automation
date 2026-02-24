@@ -529,8 +529,13 @@ function determineNewStatus(order, trackingNumber, shippoStatus) {
     
     // If order is Kit Sent → This must be MEDIA being delivered to us (Label 2)
     if (currentStatus === 'Kit Sent') {
-      console.log(`   → Detected: Media delivered to HeritageBox`);
-      return 'Media Received';
+      const label2Tracking = order.fields['Label 2 Tracking'];
+      if (trackingNumber === label2Tracking) {
+        console.log(`   → Detected: Media delivered to HeritageBox (Label 2)`);
+        return 'Media Received';
+      }
+      console.log(`   → DELIVERED on non-Label-2 tracking while Kit Sent - ignoring`);
+      return null;
     }
     
     // If order is Shipping Back → This must be ORIGINALS delivered to customer (Label 3)
