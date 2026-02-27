@@ -57,6 +57,42 @@ const airtableRequest = async (endpoint, method = 'GET', data = null) => {
   return response.data;
 };
 
+// Send a dedicated download link email
+async function sendDownloadLinkEmail({
+  customerEmail,
+  customerName,
+  orderNumber,
+  dropboxLink
+}) {
+  if (!dropboxLink) {
+    console.log(`⚠️  No Dropbox link available for order ${orderNumber}`);
+    return { sent: false, reason: 'Missing Dropbox Link' };
+  }
+
+  const msg = {
+    to: customerEmail,
+    from: process.env.SENDGRID_FROM_EMAIL,
+    subject: `Order ${orderNumber} - Your Digital Memories Are Ready! 🎉`,
+    html: `
+      <h2>Hi ${customerName},</h2>
+      <p>Your digital memories for order <strong>${orderNumber}</strong> are ready.</p>
+      <p><strong>Download your files here:</strong></p>
+      <p>
+        <a
+          href="${dropboxLink}"
+          style="display:inline-block;background-color:#0061ff;color:white;padding:12px 24px;text-decoration:none;border-radius:5px;font-weight:bold;"
+        >View Your Files</a>
+      </p>
+      <p>If you have any questions, just reply to this email.</p>
+      <p>— The Heritage Box Team</p>
+    `
+  };
+
+  await sgMail.send(msg);
+  console.log(`✅ Download link email sent to ${customerEmail} for order ${orderNumber}`);
+  return { sent: true };
+}
+
 // ============================================
 // AUTOMATION 1: SendGrid Marketing Enrollment
 // ============================================
@@ -309,10 +345,6 @@ app.post('/webhook/order-status-changed', async (req, res) => {
         html: `
           <h2>Congratulations, ${customerName}!</h2>
           <p>Your order <strong>${orderNumber}</strong> is complete!</p>
-          ${dropboxLink ? `
-            <p><strong>Access your digitized memories here:</strong></p>
-            <p><a href="${dropboxLink}" style="display:inline-block;background-color:#0061ff;color:white;padding:12px 24px;text-decoration:none;border-radius:5px;font-weight:bold;">View Your Files</a></p>
-          ` : ''}
           <p><strong>What you'll find:</strong></p>
           <ul>
             <li>High-quality scans of all your photos</li>
@@ -353,10 +385,58 @@ app.post('/webhook/order-status-changed', async (req, res) => {
     await sgMail.send(msg);
     
     console.log(`✅ Status update email sent to ${customerEmail}`);
+
+    if (opsStatusKey === 'QUALITY_CHECK') {
+      await sendDownloadLinkEmail({
+        customerEmail,
+        customerName,
+        orderNumber,
+        dropboxLink
+      });
+    }
     
     res.json({ success: true, status: opsStatus });
   } catch (error) {
     console.error('❌ Error sending status email:', error.response?.data || error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// AUTOMATION 2B: Digital Download Link Email
+// ============================================
+app.post('/webhook/send-download-link', async (req, res) => {
+  try {
+    const { record } = req.body;
+    
+    if (!record || !record.fields['Customer Email']) {
+      return res.status(400).json({ error: 'Missing customer email' });
+    }
+
+    const customerEmail = record.fields['Customer Email'];
+    const customerName = record.fields['Customer Name'] || 'Valued Customer';
+    const orderNumber = record.fields['Order Number'] || 'N/A';
+    const dropboxLink = record.fields['Dropbox Link'];
+
+    if (!dropboxLink) {
+      console.log(`⚠️  No Dropbox link available for order ${orderNumber}`);
+      return res.status(400).json({ error: 'Missing Dropbox Link' });
+    }
+
+    const result = await sendDownloadLinkEmail({
+      customerEmail,
+      customerName,
+      orderNumber,
+      dropboxLink
+    });
+
+    if (!result.sent) {
+      return res.status(400).json({ error: result.reason });
+    }
+
+    res.json({ success: true, order: orderNumber, email: customerEmail });
+  } catch (error) {
+    console.error('❌ Error sending download link email:', error.response?.data || error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -517,8 +597,20 @@ function determineNewStatus(order, trackingNumber, shippoStatus) {
       return 'Kit Sent';
     }
     
-    // If order is Quality Check/Digitizing → This must be ORIGINALS going back (Label 3 intent)
-    if (['Quality Check', 'Digitizing'].includes(currentStatus)) {
+    // If order is Quality Check → Originals are headed back (Label 1/3)
+    if (currentStatus === 'Quality Check') {
+      const label1Tracking = order.fields['Label 1 Tracking'];
+      const label3Tracking = order.fields['Label 3 Tracking'];
+      if (trackingNumber === label1Tracking || trackingNumber === label3Tracking) {
+        console.log(`   → Detected: Originals shipping back (Label 1/3)`);
+        return 'Shipping Back';
+      }
+      console.log(`   → TRANSIT on non-Label-1/3 tracking while Quality Check - ignoring`);
+      return null;
+    }
+    
+    // If order is Digitizing → Originals are shipping back (Label 3 intent)
+    if (currentStatus === 'Digitizing') {
       console.log(`   → Detected: Originals shipping back to customer`);
       return 'Shipping Back';
     }
@@ -704,6 +796,7 @@ app.get('/', (req, res) => {
       webhooks: [
         'POST /webhook/new-prospect',
         'POST /webhook/order-status-changed',
+        'POST /webhook/send-download-link',
         'POST /webhook/create-dropbox-folder',
         'POST /webhook/shippo-tracking'
       ]
@@ -722,6 +815,7 @@ app.listen(PORT, () => {
   console.log(`📍 Webhook endpoints:`);
   console.log(`   - POST /webhook/new-prospect`);
   console.log(`   - POST /webhook/order-status-changed`);
+  console.log(`   - POST /webhook/send-download-link`);
   console.log(`   - POST /webhook/create-dropbox-folder`);
   console.log(`   - POST /webhook/shippo-tracking`);
 });
