@@ -77,8 +77,8 @@ app.post('/webhook/new-prospect', async (req, res) => {
     const inquiryType = record.fields['Inquiry Type'];
     const mediaTypes = record.fields['Media Types'];
     const quantity = record.fields['Quantity'];
-    const notes = record.fields.Notes;
-    const chatTranscript = record.fields['Chat Transcript'];
+    const notes = record.fields.Notes || record.fields.Message || record.fields['Customer Message'];
+    const chatTranscript = record.fields['Chat Transcript'] || record.fields['Chat Transcript (from form)'];
     
     console.log(`📧 Enrolling ${email} in marketing automation...`);
     console.log(`Source: ${source}`);
